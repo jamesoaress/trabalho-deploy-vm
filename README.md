@@ -54,8 +54,6 @@ trabalho-deploy-vm/
 └── README.md
 ```
 
-O nome correto é **`Dockerfile`**. O antigo `DockerfIle` tinha um `I` maiúsculo e causava conflito no Windows; deve ser removido do índice Git, mantendo apenas o nome correto.
-
 ## Executar com Docker
 
 Pré-requisitos: Git, Docker Engine e plugin Docker Compose instalado e atualizado. O PHP do Windows não é necessário para esta opção.

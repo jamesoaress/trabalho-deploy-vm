@@ -1,227 +1,193 @@
 <?php
-session_start();
+declare(strict_types=1);
 
-// --- ARRAY BASE (edite aqui quando quiser adicionar novos padrões) ---
+session_start(['cookie_httponly' => true, 'cookie_samesite' => 'Lax', 'use_strict_mode' => true]);
+
+// A base é carregada só na primeira visita desta sessão. Edições e exclusões são preservadas.
 $filmesBase = [
-    [
-        'titulo' => 'James',
-        'diretor' => 'Soares Silva',
-        'ano' => 2007
-    ],
-    [
-        'titulo' => 'Interestelar',
-        'diretor' => 'Christopher Nolan',
-        'ano' => 2014
-    ],
-    [
-        'titulo' => 'Batman Begins',
-        'diretor' => 'Christopher Nolan',
-        'ano' => 2005
-    ]
+    ['titulo' => 'James', 'diretor' => 'Soares Silva', 'ano' => 2007],
+    ['titulo' => 'Interestelar', 'diretor' => 'Christopher Nolan', 'ano' => 2014],
+    ['titulo' => 'Batman Begins', 'diretor' => 'Christopher Nolan', 'ano' => 2005],
 ];
-
-// --- GARANTE SESSÃO ---
 if (!isset($_SESSION['filmes'])) {
-    $_SESSION['filmes'] = [];
+    $_SESSION['filmes'] = array_map(static function (array $filme): array {
+        $filme['id'] = bin2hex(random_bytes(16));
+        return $filme;
+    }, $filmesBase);
+}
+if (!isset($_SESSION['csrf'])) {
+    $_SESSION['csrf'] = bin2hex(random_bytes(32));
 }
 
-// --- SINCRONIZAÇÃO (array base -> sessão, sem duplicar) ---
-foreach ($filmesBase as $base) {
+function escapar(string|int $valor): string
+{
+    return htmlspecialchars((string) $valor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
 
-    $existe = false;
+function texto(array $dados, string $campo): string
+{
+    return isset($dados[$campo]) && is_string($dados[$campo]) ? trim($dados[$campo]) : '';
+}
 
-    foreach ($_SESSION['filmes'] as $f) {
-        if ($f['titulo'] === $base['titulo'] && $f['ano'] == $base['ano']) {
-            $existe = true;
-            break;
-        }
-    }
-
-    if (!$existe) {
-        $base['id'] = uniqid();
-        $_SESSION['filmes'][] = $base;
-    }
+function redirecionar(): never
+{
+    header('Location: crud-filmes.php', true, 303);
+    exit;
 }
 
 $filmes = &$_SESSION['filmes'];
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $token = texto($_POST, 'csrf');
+    if (!hash_equals($_SESSION['csrf'], $token)) {
+        http_response_code(403);
+        exit('Pedido recusado: token de segurança inválido. Recarregue a página.');
+    }
 
-// --- ADICIONAR ---
-if (isset($_POST['adicionar'])) {
+    $acao = texto($_POST, 'acao');
+    if (!in_array($acao, ['adicionar', 'atualizar', 'remover'], true)) {
+        http_response_code(400);
+        exit('Ação inválida.');
+    }
 
-    $novoFilme = [
-        'id' => uniqid(),
-        'titulo' => $_POST['titulo'],
-        'diretor' => $_POST['diretor'],
-        'ano' => $_POST['ano']
-    ];
-
-    $filmes[] = $novoFilme;
-
-    header("Location: " . $_SERVER['PHP_SELF']);
-    exit;
-}
-
-// --- REMOVER ---
-if (isset($_GET['remover'])) {
-    foreach ($filmes as $index => $f) {
-        if ($f['id'] === $_GET['remover']) {
-            unset($filmes[$index]);
-            break;
+    $id = texto($_POST, 'id');
+    $indice = null;
+    if ($acao !== 'adicionar') {
+        foreach ($filmes as $chave => $filme) {
+            if ($filme['id'] === $id) {
+                $indice = $chave;
+                break;
+            }
+        }
+        if ($indice === null) {
+            $_SESSION['aviso'] = 'Filme não encontrado. A lista pode ter sido alterada em outra aba.';
+            redirecionar();
         }
     }
 
-    $filmes = array_values($filmes);
+    if ($acao === 'remover') {
+        unset($filmes[$indice]);
+        $filmes = array_values($filmes);
+        $_SESSION['aviso'] = 'Filme removido.';
+        redirecionar();
+    }
 
-    header("Location: " . $_SERVER['PHP_SELF']);
-    exit;
+    $titulo = texto($_POST, 'titulo');
+    $diretor = texto($_POST, 'diretor');
+    $anoTexto = texto($_POST, 'ano');
+    $ano = filter_var($anoTexto, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1888, 'max_range' => 2100]]);
+    $erros = [];
+    if (!preg_match('/^.{1,150}$/us', $titulo)) {
+        $erros[] = 'Informe um título com até 150 caracteres.';
+    }
+    if (!preg_match('/^.{1,150}$/us', $diretor)) {
+        $erros[] = 'Informe um diretor com até 150 caracteres.';
+    }
+    if ($ano === false) {
+        $erros[] = 'Informe um ano inteiro entre 1888 e 2100.';
+    }
+    if ($erros) {
+        $_SESSION['erros'] = $erros;
+        $_SESSION['formulario'] = ['id' => $id, 'titulo' => $titulo, 'diretor' => $diretor, 'ano' => $anoTexto, 'acao' => $acao];
+        redirecionar();
+    }
+
+    $filme = ['id' => $acao === 'adicionar' ? bin2hex(random_bytes(16)) : $id, 'titulo' => $titulo, 'diretor' => $diretor, 'ano' => $ano];
+    if ($acao === 'adicionar') {
+        $filmes[] = $filme;
+        $_SESSION['aviso'] = 'Filme adicionado.';
+    } else {
+        $filmes[$indice] = $filme;
+        $_SESSION['aviso'] = 'Filme atualizado.';
+    }
+    redirecionar();
 }
 
-// --- EDITAR ---
 $filmeParaEditar = null;
-
 if (isset($_GET['editar'])) {
-    foreach ($filmes as $f) {
-        if ($f['id'] === $_GET['editar']) {
-            $filmeParaEditar = $f;
+    $idEditar = texto($_GET, 'editar');
+    foreach ($filmes as $filme) {
+        if ($filme['id'] === $idEditar) {
+            $filmeParaEditar = $filme;
             break;
         }
     }
 }
-
-// --- ATUALIZAR ---
-if (isset($_POST['atualizar'])) {
-    foreach ($filmes as &$f) {
-        if ($f['id'] === $_POST['id']) {
-            $f['titulo'] = $_POST['titulo'];
-            $f['diretor'] = $_POST['diretor'];
-            $f['ano'] = $_POST['ano'];
-            break;
-        }
-    }
-
-    header("Location: " . $_SERVER['PHP_SELF']);
-    exit;
-}
+$aviso = $_SESSION['aviso'] ?? '';
+$erros = $_SESSION['erros'] ?? [];
+$formulario = $_SESSION['formulario'] ?? $filmeParaEditar ?? ['titulo' => '', 'diretor' => '', 'ano' => ''];
+$editando = isset($_SESSION['formulario']) ? $_SESSION['formulario']['acao'] === 'atualizar' : $filmeParaEditar !== null;
+unset($_SESSION['aviso'], $_SESSION['erros'], $_SESSION['formulario']);
 ?>
-
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <title>CRUD de Filmes (Array + Sessão)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CRUD de Filmes</title>
     <style>
-        body {
-            font-family: Arial;
-            background: #f0f2f5;
-            padding: 40px;
-        }
-        .container {
-            max-width: 800px;
-            margin: auto;
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-        }
-        form {
-            margin-bottom: 20px;
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        input {
-            padding: 8px;
-            flex: 1;
-        }
-        button {
-            padding: 8px;
-            cursor: pointer;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 10px;
-            border-bottom: 1px solid #ccc;
-        }
-        th {
-            background: #007bff;
-            color: white;
-        }
-        a {
-            text-decoration: none;
-            margin-right: 5px;
-        }
+        body { font-family: Arial, sans-serif; background: #f0f2f5; padding: 24px; color: #17212c; }
+        .container { max-width: 900px; margin: auto; background: white; padding: 24px; border-radius: 10px; }
+        form.cadastro { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; align-items: end; }
+        label { flex: 1; min-width: 140px; }
+        input { display: block; box-sizing: border-box; width: 100%; padding: 9px; margin-top: 6px; }
+        button { padding: 9px; cursor: pointer; }
+        .tabela { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; border-bottom: 1px solid #ccc; text-align: left; overflow-wrap: anywhere; }
+        th { background: #0865c8; color: white; }
+        a { color: #064fab; margin-right: 10px; }
+        .remover { display: inline; }
+        .aviso { background: #edf6ff; padding: 12px; }
+        .erros { background: #fff0ef; padding: 12px 12px 12px 30px; }
+        small { display: block; margin-top: 24px; line-height: 1.5; }
     </style>
 </head>
 <body>
-
-<div class="container">
-
-    <h2><?= $filmeParaEditar ? "Editar Filme" : "Adicionar Filme" ?></h2>
-
-    <form method="POST">
-        <?php if ($filmeParaEditar): ?>
-            <input type="hidden" name="id" value="<?= $filmeParaEditar['id'] ?>">
-        <?php endif; ?>
-
-        <input type="text" name="titulo" placeholder="Título" required
-            value="<?= $filmeParaEditar['titulo'] ?? '' ?>">
-
-        <input type="text" name="diretor" placeholder="Diretor"
-            value="<?= $filmeParaEditar['diretor'] ?? '' ?>">
-
-        <input type="number" name="ano" placeholder="Ano"
-            value="<?= $filmeParaEditar['ano'] ?? '' ?>">
-
-        <?php if ($filmeParaEditar): ?>
-            <button type="submit" name="atualizar">Atualizar</button>
-            <a href="<?= $_SERVER['PHP_SELF'] ?>">Cancelar</a>
-        <?php else: ?>
-            <button type="submit" name="adicionar">Adicionar</button>
-        <?php endif; ?>
+<main class="container">
+    <h1>Lista de Filmes do James</h1>
+    <!-- Altere esta frase e faça push para demonstrar a atualização automática. -->
+    <p>Versão para demonstração: 1</p>
+    <?php if ($aviso !== ''): ?><p class="aviso" role="status"><?= escapar($aviso) ?></p><?php endif; ?>
+    <?php if ($erros): ?>
+        <ul class="erros" role="alert"><?php foreach ($erros as $erro): ?><li><?= escapar($erro) ?></li><?php endforeach; ?></ul>
+    <?php endif; ?>
+    <h2><?= $editando ? 'Editar filme' : 'Adicionar filme' ?></h2>
+    <form class="cadastro" method="post" action="crud-filmes.php">
+        <input type="hidden" name="csrf" value="<?= escapar($_SESSION['csrf']) ?>">
+        <input type="hidden" name="acao" value="<?= $editando ? 'atualizar' : 'adicionar' ?>">
+        <?php if ($editando): ?><input type="hidden" name="id" value="<?= escapar($formulario['id']) ?>"><?php endif; ?>
+        <label>Título<input type="text" name="titulo" maxlength="150" required value="<?= escapar($formulario['titulo']) ?>"></label>
+        <label>Diretor<input type="text" name="diretor" maxlength="150" required value="<?= escapar($formulario['diretor']) ?>"></label>
+        <label>Ano<input type="number" name="ano" min="1888" max="2100" required value="<?= escapar($formulario['ano']) ?>"></label>
+        <button type="submit"><?= $editando ? 'Atualizar' : 'Adicionar' ?></button>
+        <?php if ($editando): ?><a href="crud-filmes.php">Cancelar</a><?php endif; ?>
     </form>
-
-    <h2>Lista de Filmes do James</h2>
-    <p> teste de deploy </p>
-
-
-
-    <table>
-        <thead>
-            <tr>
-                <th>Título</th>
-                <th>Diretor</th>
-                <th>Ano</th>
-                <th>Ações</th>
-            </tr>
-        </thead>
-        <tbody>
-            <?php foreach ($filmes as $f): ?>
+    <div class="tabela">
+        <table>
+            <thead><tr><th>Título</th><th>Diretor</th><th>Ano</th><th>Ações</th></tr></thead>
+            <tbody>
+            <?php foreach ($filmes as $filme): ?>
                 <tr>
-                    <td><?= htmlspecialchars($f['titulo']) ?></td>
-                    <td><?= htmlspecialchars($f['diretor']) ?></td>
-                    <td><?= htmlspecialchars($f['ano']) ?></td>
+                    <td><?= escapar($filme['titulo']) ?></td>
+                    <td><?= escapar($filme['diretor']) ?></td>
+                    <td><?= escapar($filme['ano']) ?></td>
                     <td>
-                        <a href="?editar=<?= $f['id'] ?>">Editar</a>
-                        <a href="?remover=<?= $f['id'] ?>"
-                           onclick="return confirm('Excluir este filme?')">Remover</a>
+                        <a href="?editar=<?= escapar($filme['id']) ?>">Editar</a>
+                        <form class="remover" method="post" action="crud-filmes.php" onsubmit="return confirm('Excluir este filme?')">
+                            <input type="hidden" name="csrf" value="<?= escapar($_SESSION['csrf']) ?>">
+                            <input type="hidden" name="acao" value="remover">
+                            <input type="hidden" name="id" value="<?= escapar($filme['id']) ?>">
+                            <button type="submit">Remover</button>
+                        </form>
                     </td>
                 </tr>
             <?php endforeach; ?>
-
-            <?php if (empty($filmes)): ?>
-                <tr>
-                    <td colspan="4">Nenhum filme cadastrado</td>
-                </tr>
-            <?php endif; ?>
-        </tbody>
-    </table>
-
-    <br>
-    <small>* Dados ficam na sessão (não duplicam com F5)</small>
-
-</div>
-
+            <?php if (!$filmes): ?><tr><td colspan="4">Nenhum filme cadastrado.</td></tr><?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+    <small>Os dados ficam na sessão PHP deste navegador. Outro navegador ou uma nova sessão tem sua própria lista.
+        Os dados podem desaparecer quando a sessão expira. O projeto não utiliza banco de dados.</small>
+</main>
 </body>
 </html>

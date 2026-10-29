@@ -1,0 +1,4 @@
+.env
+*.log
+actions-runner/
+.phpunit.cache/

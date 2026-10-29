@@ -1,0 +1,11 @@
+.git
+.github
+docs
+tests
+work
+outputs
+README.md
+*.zip
+*.log
+.env
+actions-runner

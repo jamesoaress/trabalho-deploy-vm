@@ -1,214 +1,176 @@
-Giovanni Bernardi Rodrigues 250394
+# Trabalho 2 - Deploy automático em VM
 
-## Sumário
+CRUD de filmes em PHP, executado com Docker Compose no Ubuntu Server e atualizado automaticamente pelo GitHub Actions em um runner instalado na própria VM.
 
-- [Visão geral](#visão-geral)
-- [Estrutura do projeto](#estrutura-do-projeto)
-- [Pré-requisitos](#pré-requisitos)
-- [Como rodar localmente](#como-rodar-localmente)
-- [Como rodar na VM (Ubuntu Server)](#como-rodar-na-vm-ubuntu-server)
-- [Deploy automático (GitHub Actions)](#deploy-automático-github-actions)
-- [Comandos úteis](#comandos-úteis)
-- [Observações](#observações)
+| Integrante | RA |
+| --- | --- |
+| Giovanni Bernardi Rodrigues | 250394 |
+| James Soares Silva | 250380 |
+
+Repositório: [jamesoaress/trabalho-deploy-vm](https://github.com/jamesoaress/trabalho-deploy-vm).
+
+## Por onde começar
+
+**Se você está no Windows e ainda vai criar a VM, siga o [guia completo: VirtualBox, Ubuntu, Docker e runner](docs/guia-vm.md).** Ele informa onde executar cada comando, como configurar a rede e como comprovar o deploy.
+
+- [O que o projeto faz](#o-que-o-projeto-faz)
+- [Executar com Docker](#executar-com-docker)
+- [Como o deploy automático funciona](#como-o-deploy-automático-funciona)
+- [Testar e demonstrar](#testar-e-demonstrar)
 - [Problemas comuns](#problemas-comuns)
+- [Conferência do enunciado e evidências](docs/analise-trabalho2.md)
 
-## Visão geral
+## O que o projeto faz
 
-| Item | Detalhe |
-|------|---------|
-| Aplicação | CRUD de filmes (título, diretor, ano): adicionar, editar e remover |
-| Linguagem | PHP 8.2 (imagem `php:8.2-apache`) |
-| Armazenamento | Sessão PHP (`$_SESSION`). Não usa banco de dados |
-| Container | Docker + Docker Compose |
-| Porta | `8080` (host) → `80` (container) |
-| Deploy | GitHub Actions em runner self-hosted na VM |
+Permite **cadastrar, listar, editar e excluir filmes**, com título, diretor e ano. Os três filmes iniciais são inseridos apenas na criação da lista da sessão. Uma exclusão ou edição não é desfeita ao atualizar a página.
 
-## Estrutura do projeto
+| Tecnologia | Função |
+| --- | --- |
+| PHP 8.2 + Apache | Aplicação e servidor HTTP, imagem `php:8.2-apache` |
+| Sessão PHP | Lista individual de filmes de cada navegador |
+| Docker + Docker Compose | Construção e execução na VM |
+| GitHub Actions | Workflow após push na branch `main` |
+| Runner self-hosted Linux x64 | Executa o workflow dentro do Ubuntu da VM |
+| VirtualBox + Ubuntu Server | Ambiente local de hospedagem |
 
-```
+Não há banco de dados. O volume Docker conserva os arquivos de sessão ao recriar o container, mas a sessão ainda depende do cookie e pode expirar. Outro navegador ou uma janela anônima recebe uma lista própria. Um catálogo compartilhado exigiria outro armazenamento.
+
+As operações que alteram a lista usam POST com token CSRF, os campos são validados no servidor e a saída HTML é escapada.
+
+## Estrutura
+
+```text
 trabalho-deploy-vm/
-├── .github/workflows/   # workflow(s) do GitHub Actions (deploy)
-├── crud-filmes.php      # aplicação (CRUD de filmes)
-├── Dockerfile           # php:8.2-apache + cópia dos arquivos para /var/www/html
-├── docker-compose.yml   # serviço app-crud, porta 8080:80
+├── .github/workflows/deploy.yml  # deploy por push ou execução manual
+├── docker/php.ini               # configuração das sessões
+├── docs/guia-vm.md              # instalação desde a criação da VM
+├── docs/analise-trabalho2.md     # requisitos e evidências pendentes
+├── tests/smoke.php              # teste HTTP do CRUD
+├── index.php                   # entrada da aplicação
+├── crud-filmes.php             # CRUD de filmes
+├── health.php                  # saúde e commit publicado
+├── Dockerfile                  # imagem da aplicação
+├── docker-compose.yml          # serviço, porta, volume e healthcheck
 └── README.md
 ```
 
-## Pré-requisitos
+O nome correto é **`Dockerfile`**. O antigo `DockerfIle` tinha um `I` maiúsculo e causava conflito no Windows; deve ser removido do índice Git, mantendo apenas o nome correto.
 
-### Para rodar com Docker (recomendado)
+## Executar com Docker
 
-Só é necessário instalar:
+Pré-requisitos: Git, Docker Engine e plugin Docker Compose instalado e atualizado. O PHP do Windows não é necessário para esta opção.
 
-- **Git**
-- **Docker Engine**
-- **Docker Compose** (plugin v2, comando `docker compose`)
-
-> Não é preciso instalar PHP, Apache nem nenhuma outra dependência na máquina. Tudo vem dentro da imagem `php:8.2-apache`.
-
-Verifique se está tudo instalado:
+No terminal do Ubuntu da VM, depois de [instalar o Docker](docs/guia-vm.md#5-instalar-docker-e-compose-na-vm):
 
 ```bash
-git --version
-docker --version
-docker compose version
-```
-
-### Para rodar sem Docker (opcional)
-
-- **PHP 8.2 ou superior** (CLI), apenas para testar rapidamente.
-
-### Para o deploy automático na VM
-
-- VM com **Ubuntu Server** e acesso por SSH
-- **Git**, **Docker Engine** e **Docker Compose plugin** instalados na VM
-- **Runner self-hosted do GitHub Actions** instalado e registrado no repositório
-- Usuário do runner no grupo `docker`
-- Porta **8080** liberada no firewall/rede da VM
-
-## Como rodar localmente
-
-### Opção 1: Docker Compose (recomendada)
-
-```bash
-# 1. Clonar o repositório
 git clone https://github.com/jamesoaress/trabalho-deploy-vm.git
 cd trabalho-deploy-vm
-
-# 2. Subir o container (faz o build da imagem)
-docker compose up -d --build
+docker compose config --quiet
+docker compose up -d --build --wait --wait-timeout 120
+docker compose ps
+curl -fsS http://127.0.0.1:8080/health.php
 ```
 
-Acesse no navegador: **http://localhost:8080/crud-filmes.php**
+O repositório remoto precisa conter os arquivos desta versão antes de cloná-lo. As alterações locais só chegam ao GitHub depois de commit e push, conforme o guia.
 
-> Atenção: o `Dockerfile` copia o projeto para `/var/www/html/`, então a aplicação fica no caminho `/crud-filmes.php`. Acessar apenas `http://localhost:8080/` mostra a listagem de arquivos ou erro 403, pois não existe `index.php`.
+| Onde você acessa | Endereço |
+| --- | --- |
+| Windows, com NAT e encaminhamento do guia | `http://127.0.0.1:8080/` |
+| Terminal da própria VM | `http://127.0.0.1:8080/` |
+| Outro computador, usando Bridge na mesma rede | `http://IP_DA_VM:8080/` |
 
-Para parar:
+`/crud-filmes.php` também funciona. `/health.php` retorna `status: ok` e `revision`: `local` no build manual ou o SHA do commit no deploy pelo runner.
+
+O Compose usa o nome fixo `trabalho-deploy-vm`; por isso o primeiro teste manual e o runner atualizam o mesmo serviço, mesmo estando em pastas diferentes. Use uma única instalação desse projeto por VM. A porta interna da VM permanece 8080 para corresponder ao workflow e ao encaminhamento do VirtualBox.
+
+### Teste rápido sem Docker no Windows
+
+Se você tem XAMPP no caminho padrão, abra PowerShell na pasta do projeto:
+
+```powershell
+& 'C:\xampp\php\php.exe' -S 127.0.0.1:8081 -t .
+```
+
+Abra `http://127.0.0.1:8081/`. Para encerrar, use Ctrl+C. Esse teste ajuda a conferir a aplicação; a demonstração do trabalho será na VM com o runner. A porta 8081 evita conflito com o encaminhamento 8080 da VM. O servidor embutido serve a pasta do projeto e deve ser usado somente para esse teste local.
+
+## Como o deploy automático funciona
+
+```text
+Alteração no Windows -> commit e push para main -> GitHub Actions
+    -> runner Linux na VM -> checkout do commit -> build e validação PHP
+    -> atualização do container -> healthcheck -> nova versão no navegador
+```
+
+O arquivo [.github/workflows/deploy.yml](.github/workflows/deploy.yml) dispara após qualquer push para `main`. Também permite **Actions > Deploy Automático na VM > Run workflow**, selecionando `main`, para o primeiro teste.
+
+O job exige as labels **`self-hosted`, `linux`, `x64` e `deploy-vm`**. A label personalizada `deploy-vm` é configurada ao registrar o runner, como explicado no guia. O runner trabalha em seu diretório `_work`; você não precisa executar `git pull` ou comandos de deploy na VM após cada alteração.
+
+O workflow verifica acesso ao Docker, constrói a imagem e valida a sintaxe PHP antes de atualizar a aplicação. A implantação aguarda o healthcheck e mostra logs em caso de falha. Ele usa permissão de leitura do repositório, serializa os deploys e não grava o token Git no checkout.
+
+A atualização pode causar uma breve interrupção ao recriar o container. Não há rollback automático. O volume de sessões fica separado do código e continua disponível depois da recriação.
+
+## Testar e demonstrar
+
+1. Cadastre um filme e confira a listagem.
+2. Edite um filme padrão e atualize a página: a edição deve permanecer.
+3. Exclua outro filme padrão e atualize a página: ele deve continuar excluído.
+4. No arquivo `crud-filmes.php`, altere o texto **`Versão para demonstração: 1`** para **`Versão para demonstração: 2`**.
+5. Faça commit e push para `main`. Acompanhe a execução na aba Actions e atualize o navegador do Windows com Ctrl+F5.
+6. Confira a nova mensagem e o SHA em `/health.php`. Guarde as evidências indicadas em [análise e checklist](docs/analise-trabalho2.md).
+
+Para executar o teste HTTP, mantenha a aplicação aberta e, em outro terminal na pasta do projeto, execute:
+
+```powershell
+& 'C:\xampp\php\php.exe' tests/smoke.php http://127.0.0.1:8081
+```
+
+Ele usa sua própria sessão e não altera a lista do navegador.
+
+## Comandos úteis na VM
+
+Execute na pasta do clone manual ou no diretório de checkout do runner que contém `docker-compose.yml`:
 
 ```bash
+docker compose ps
+docker compose logs --tail=100
+docker compose logs -f
+docker compose up -d --build --wait --wait-timeout 120
 docker compose down
 ```
 
-### Opção 2: Docker sem Compose
+`down` para a aplicação e mantém o volume. `down -v` também apaga as sessões; não use essa opção durante a demonstração.
 
-```bash
-docker build -t app-crud .
-docker run -d --name app-crud -p 8080:80 app-crud
-```
-
-### Opção 3: PHP embutido (sem Docker)
-
-Com o PHP 8.2+ instalado:
-
-```bash
-php -S localhost:8080
-```
-
-Acesse: **http://localhost:8080/crud-filmes.php**
-
-## Como rodar na VM (Ubuntu Server)
-
-### 1. Instalar Docker e Compose
-
-```bash
-sudo apt update
-sudo apt install -y git ca-certificates curl
-
-# Docker pelo script oficial
-curl -fsSL https://get.docker.com | sudo sh
-
-# Permitir usar docker sem sudo (faça logout/login depois)
-sudo usermod -aG docker $USER
-```
-
-Confirme:
-
-```bash
-docker --version
-docker compose version
-```
-
-### 2. Liberar a porta 8080
-
-Se o `ufw` estiver ativo:
-
-```bash
-sudo ufw allow 8080/tcp
-```
-
-Se a VM estiver em um provedor de nuvem ou em rede virtual (VirtualBox, VMware etc.), libere também a porta no Security Group / redirecionamento de portas.
-
-### 3. Subir manualmente (primeira vez ou teste)
-
-```bash
-git clone https://github.com/jamesoaress/trabalho-deploy-vm.git
-cd trabalho-deploy-vm
-docker compose up -d --build
-```
-
-Acesse: **http://IP_DA_VM:8080/crud-filmes.php**
-
-Para descobrir o IP da VM:
-
-```bash
-hostname -I
-```
-
-## Deploy automático (GitHub Actions)
-
-A cada `push` na branch `main`, o workflow em `.github/workflows/` é executado em um **runner self-hosted** instalado na própria VM, que atualiza o código e recria o container (`docker compose up -d --build`).
-
-### Registrar o runner na VM
-
-1. No GitHub, abra o repositório → **Settings → Actions → Runners → New self-hosted runner**.
-2. Escolha **Linux** e a arquitetura da VM (geralmente **x64**).
-3. Execute na VM os comandos de **Download** e **Configure** exibidos pelo GitHub (inclui o token de registro).
-4. Instale como serviço para o runner continuar ativo após reiniciar:
+Para o serviço do runner:
 
 ```bash
 cd ~/actions-runner
-sudo ./svc.sh install
-sudo ./svc.sh start
 sudo ./svc.sh status
+sudo ./svc.sh stop
+sudo ./svc.sh start
 ```
-
-5. Confirme que o runner aparece como **Idle** em Settings → Actions → Runners.
-
-> O usuário que executa o runner precisa pertencer ao grupo `docker`, senão o deploy falha com `permission denied` ao acessar o Docker.
-
-### Fluxo do deploy
-
-1. Fazer alterações no código (por exemplo em `crud-filmes.php`).
-2. `git add . && git commit -m "mensagem" && git push origin main`
-3. O GitHub Actions dispara o workflow no runner da VM.
-4. O container é reconstruído e a nova versão fica disponível em `http://IP_DA_VM:8080/crud-filmes.php`.
-
-Acompanhe a execução na aba **Actions** do repositório.
-
-## Comandos úteis
-
-```bash
-docker compose ps                 # status dos containers
-docker compose logs -f            # logs em tempo real
-docker compose up -d --build      # rebuild e subir
-docker compose down               # parar e remover containers
-docker compose restart            # reiniciar
-```
-
-## Observações
-
-- Os dados do CRUD ficam em **sessão PHP**. Eles **somem** ao reiniciar o container ou quando a sessão expira, e cada navegador/usuário enxerga a sua própria lista.
-- Três filmes padrão (James, Interestelar, Batman Begins) são carregados automaticamente a partir do array `$filmesBase` em `crud-filmes.php`. Para mudar os padrões, edite esse array.
-- Não há banco de dados, arquivo `.env` ou variáveis de ambiente para configurar.
-- O repositório contém um arquivo chamado `DockerfIle` (com "I" maiúsculo no lugar do "l") além do `Dockerfile`. Ele é um duplicado por engano e pode ser removido; o Docker usa apenas o `Dockerfile`.
 
 ## Problemas comuns
 
-| Problema | Causa provável | Solução |
-|----------|----------------|---------|
-| `Forbidden` ao abrir `http://localhost:8080/` | Não existe `index.php` | Acessar `/crud-filmes.php` |
-| `port is already allocated` | Porta 8080 em uso | Trocar para outra porta em `docker-compose.yml` (ex.: `"8081:80"`) |
-| `permission denied` no Docker | Usuário fora do grupo `docker` | `sudo usermod -aG docker $USER` e reabrir a sessão |
-| Não abre pelo IP da VM | Firewall ou rede bloqueando | Liberar a porta 8080 (`ufw` / rede da VM) |
-| Workflow fica em "Waiting for a runner" | Runner offline | `sudo ./svc.sh status` e `sudo ./svc.sh start` na VM |
-| Alteração não aparece após o push | Cache do navegador ou workflow falhou | Verificar a aba Actions e dar Ctrl+F5 |
+| Sintoma | O que conferir |
+| --- | --- |
+| `Waiting for a runner` | VM ligada, serviço iniciado e quatro labels do workflow, inclusive `deploy-vm` |
+| `permission denied` no Docker | Usuário do runner no grupo `docker`; reconectar SSH e parar/iniciar o serviço |
+| `docker: command not found` | Docker instalado dentro do Ubuntu, onde o runner executa |
+| `docker compose` ou `--wait` não reconhecido | Instalar/atualizar `docker-compose-plugin` pelo repositório oficial |
+| Windows não abre a aplicação | NAT com regra 8080 -> 8080, VM ligada e container saudável |
+| SSH recusado | Regra 2222 -> 22, OpenSSH ativo e usuário correto |
+| Porta 8080 ocupada na VM | `docker ps` e `sudo ss -ltnp`; verificar serviço antigo antes de pará-lo |
+| Porta 8080 ocupada no Windows | Trocar somente a porta do hospedeiro na regra NAT, por exemplo para 8082; acessar `http://127.0.0.1:8082/` |
+| Build falhou | Abrir o step com erro em Actions; conferir internet da VM e acesso ao Docker Hub |
+| Alteração não aparece | Conferir push para `main`, job concluído, Ctrl+F5 e SHA em `/health.php` |
+| Git avisa sobre maiúsculas no Dockerfile | Deixar apenas `Dockerfile` no índice; procedimento no guia |
+
+## Referências
+
+- [Docker Engine no Ubuntu](https://docs.docker.com/engine/install/ubuntu/)
+- [Docker Compose up e healthcheck](https://docs.docker.com/reference/cli/docker/compose/up/)
+- [Adicionar runner self-hosted](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)
+- [Runner como serviço](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/configure-the-application)
+- [Rede do VirtualBox 7.2](https://docs.oracle.com/en/virtualization/virtualbox/7.2/user/networkingdetails.html)
+
+Confira o [checklist de entrega](docs/analise-trabalho2.md) após executar o projeto. A existência dos arquivos não comprova, sozinha, que a VM e o runner funcionaram.

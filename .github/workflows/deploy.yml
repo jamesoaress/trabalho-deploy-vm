@@ -7,13 +7,13 @@ on:
 
 jobs:
   deploy:
-    runs-on: self-hosted # Isto é crucial para ativar o seu Runner!
+    runs-on: self-hosted
 
-   steps:
+    steps:
       - name: Baixar o código atualizado
         uses: actions/checkout@v4
 
       - name: Reiniciar a aplicação no Docker
         run: |
-          docker compose down
-          docker compose up -d --build
+          docker-compose down
+          docker-compose up -d --build

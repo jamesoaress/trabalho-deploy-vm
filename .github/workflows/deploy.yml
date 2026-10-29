@@ -15,5 +15,5 @@ jobs:
 
       - name: Reiniciar a aplicação no Docker
         run: |
-          docker-compose down
-          docker-compose up -d --build
+          docker compose down
+          docker compose up -d --build

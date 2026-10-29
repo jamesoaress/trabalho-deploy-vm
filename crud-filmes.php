@@ -146,7 +146,7 @@ unset($_SESSION['aviso'], $_SESSION['erros'], $_SESSION['formulario']);
 <main class="container">
     <h1>Lista de Filmes do James</h1>
     <!-- Altere esta frase e faça push para demonstrar a atualização automática. -->
-    <p>Versão para demonstração: 1</p>
+    <p>Versão para demonstração: 2</p>
     <?php if ($aviso !== ''): ?><p class="aviso" role="status"><?= escapar($aviso) ?></p><?php endif; ?>
     <?php if ($erros): ?>
         <ul class="erros" role="alert"><?php foreach ($erros as $erro): ?><li><?= escapar($erro) ?></li><?php endforeach; ?></ul>

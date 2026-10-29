@@ -182,7 +182,7 @@ if (isset($_POST['atualizar'])) {
         <?php endif; ?>
     </form>
 
-    <h2>Lista de Filmes</h2>
+    <h2>Lista de Filmes do James</h2>
 
     <table>
         <thead>
